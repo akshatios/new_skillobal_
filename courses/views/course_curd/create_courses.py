@@ -4,6 +4,7 @@ from typing import Optional, List
 from bson import ObjectId
 from core.database import courses_collection, courses_videos_collection, course_intro_video_collection
 from helper_function.video_upload import upload_to_tencent_vod
+from helper_function.image_upload import upload_image_to_tencent
 from helper_function.layoutdata_update import update_layout_by_rating
 from datetime import datetime
 
@@ -29,7 +30,7 @@ async def create_course(
     category_id: str = Form(...),
     language: str = Form(...),
     visible: bool = Form(...),
-    course_image_url: str = Form(...),
+    course_image_url: Optional[UploadFile] = File(None),
     course_intro_video: Optional[UploadFile] = File(None),
     rating: Optional[float] = Form(None),
     price: Optional[float] = Form(None),
@@ -78,8 +79,23 @@ async def create_course(
                 container_result = await courses_videos_collection.insert_one(video_container)
                 videos_container_id = container_result.inserted_id
         
-        # Handle course intro video upload to separate collection
-        course_intro_video_id = None
+        # Handle course image upload to Tencent Cloud
+        images_array = []
+        
+        if course_image_url and course_image_url.filename:
+            course_image_content = await course_image_url.read()
+            course_image_result = await upload_image_to_tencent(course_image_content, course_image_url.filename)
+            
+            image_obj = {
+                "fileId": course_image_result["file_id"],
+                "imageUrl": course_image_result["image_url"],
+                "type": "course_image",
+                "uploaded_at": current_time
+            }
+            images_array.append(image_obj)
+        
+        # Handle course intro video upload
+        intro_videos_array = []
         intro_video_url = None
         
         if course_intro_video and course_intro_video.filename:
@@ -89,12 +105,10 @@ async def create_course(
             intro_video_obj = {
                 "fileId": course_intro_video_result["file_id"],
                 "videoUrl": course_intro_video_result["video_url"],
-                "created_at": current_time
+                "type": "intro_video",
+                "uploaded_at": current_time
             }
-            
-            # Insert into course_intro_video collection
-            intro_video_result = await course_intro_video_collection.insert_one(intro_video_obj)
-            course_intro_video_id = intro_video_result.inserted_id
+            intro_videos_array.append(intro_video_obj)
             intro_video_url = course_intro_video_result["video_url"]
             
 
@@ -105,8 +119,8 @@ async def create_course(
             "category_id": ObjectId(category_id) if category_id and category_id != "string" else None,
             "language": language,
             "visible": visible,
-            "course_image_url": course_image_url,
-            "course_intro_video_id": course_intro_video_id,
+            "images": images_array,
+            "intro_videos": intro_videos_array,
             "videos": videos_container_id,
             "rating": rating,
             "price": price,
@@ -125,20 +139,14 @@ async def create_course(
                 {"$set": {"course_id": course_id}}
             )
         
-        # Update course intro video with course_id
-        if course_intro_video_id:
-            await course_intro_video_collection.update_one(
-                {"_id": course_intro_video_id},
-                {"$set": {"course_id": course_id}}
-            )
+
 
         new_course["_id"] = course_id
         if new_course["instructor_id"]:
             new_course["instructor_id"] = str(new_course["instructor_id"])
         if new_course["category_id"]:
             new_course["category_id"] = str(new_course["category_id"])
-        if new_course["course_intro_video_id"]:
-            new_course["course_intro_video_id"] = str(new_course["course_intro_video_id"])
+
         if new_course["videos"]:
             new_course["videos"] = str(new_course["videos"])
 
@@ -148,20 +156,29 @@ async def create_course(
         except Exception:
             pass  # Don't fail course creation if layout update fails
 
+        # Fetch videos data for response
+        videos_data = []
+        if videos_container_id:
+            video_container = await courses_videos_collection.find_one({"_id": videos_container_id})
+            if video_container and "videos" in video_container:
+                videos_data = video_container["videos"]
+        
         # Format response for frontend compatibility
         response_data = {
             "_id": course_id,
             "title": title,
             "description": description,
-            "image_url": course_image_url,  # Frontend expects image_url
+            "images": images_array,
+            "intro_videos": intro_videos_array,
+            "image_url": images_array[0]["imageUrl"] if images_array else None,  # Backward compatibility
+            "intro_video": intro_video_url,  # Backward compatibility
             "rating": rating or 0.0,
             "price": price or 0.0,
             "visible": visible,
             "instructor_id": str(new_course["instructor_id"]) if new_course["instructor_id"] else None,
             "category_id": str(new_course["category_id"]) if new_course["category_id"] else None,
             "content_language": language,
-            "videos": [],  # Frontend expects empty array for course videos
-            "intro_video": intro_video_url,  # Frontend expects intro_video
+            "videos": videos_data,  # Actual videos data
             "created_at": current_time,
             "updated_at": current_time
         }
