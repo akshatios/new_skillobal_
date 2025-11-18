@@ -24,8 +24,21 @@ class TencentSettings(BaseSettings):
         env_file = ".env"
         extra = "ignore"  # Ignore extra fields in the .env file
 
+class AIFeatureSecrets(BaseSettings):
+    BASE_DIR: Path = Path(__file__).resolve().parent.parent
+    # HUGGINGFACEHUB_API_TOKEN: str
+    GOOGLE_API_KEY: str
+    LANGCHAIN_API_KEY: str
+    LANGCHAIN_PROJECT: str
+    LANGCHAIN_TRACING_V2: bool
+    OPENAI_API_KEY: str
+    XAI_API_KEY: str
+    class Config:
+        env_file = ".env"
+        extra = "ignore"  
 
 # Instantiate settings
 db_settings = DatabaseSettings()
 jwt_settings = JWTSettings()
 settings = TencentSettings()
+ai_api_secrets = AIFeatureSecrets()
