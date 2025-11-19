@@ -65,58 +65,28 @@ async def add_videos_to_course(
         if not new_videos_list:
             raise HTTPException(status_code=400, detail="No valid videos were uploaded")
         
-        # Handle video container logic
-        videos_container_id = None
+        # Insert individual video documents
+        new_video_ids = []
+        for video_obj in new_videos_list:
+            video_obj["course_id"] = course_id
+            video_result = await courses_videos_collection.insert_one(video_obj)
+            new_video_ids.append(video_result.inserted_id)
         
-        if "videos" in existing_course and existing_course["videos"]:
-            # Add to existing video container
-            video_container = await courses_videos_collection.find_one({"_id": existing_course["videos"]})
-            if video_container:
-                existing_videos = video_container.get("videos", [])
-                updated_videos = existing_videos + new_videos_list
-                
-                await courses_videos_collection.update_one(
-                    {"_id": existing_course["videos"]},
-                    {"$set": {"videos": updated_videos, "updated_at": current_time}}
-                )
-                videos_container_id = existing_course["videos"]
-                logger.info(f"Added {len(new_videos_list)} videos to existing container")
-            else:
-                # Container not found, create new one
-                video_container = {
-                    "videos": new_videos_list,
-                    "course_id": course_id,
-                    "created_at": current_time
-                }
-                container_result = await courses_videos_collection.insert_one(video_container)
-                videos_container_id = container_result.inserted_id
-                
-                # Update course with new container ID
-                await courses_collection.update_one(
-                    {"_id": ObjectId(course_id)},
-                    {"$set": {"videos": videos_container_id, "updated_at": current_time}}
-                )
-                logger.info(f"Created new video container with {len(new_videos_list)} videos")
-        else:
-            # Create new video container
-            video_container = {
-                "videos": new_videos_list,
-                "course_id": course_id,
-                "created_at": current_time
-            }
-            container_result = await courses_videos_collection.insert_one(video_container)
-            videos_container_id = container_result.inserted_id
-            
-            # Update course with new container ID
-            await courses_collection.update_one(
-                {"_id": ObjectId(course_id)},
-                {"$set": {"videos": videos_container_id, "updated_at": current_time}}
-            )
-            logger.info(f"Created new video container with {len(new_videos_list)} videos")
+        # Update course with new video IDs
+        existing_video_ids = existing_course.get("videos", [])
+        updated_video_ids = existing_video_ids + new_video_ids
         
-        # Get updated videos for response
-        video_container = await courses_videos_collection.find_one({"_id": videos_container_id})
-        all_videos = video_container.get("videos", []) if video_container else []
+        await courses_collection.update_one(
+            {"_id": ObjectId(course_id)},
+            {"$set": {"videos": updated_video_ids, "updated_at": current_time}}
+        )
+        
+        # Get all videos for response
+        all_videos_cursor = courses_videos_collection.find({"_id": {"$in": updated_video_ids}})
+        all_videos = []
+        async for video in all_videos_cursor:
+            video["_id"] = str(video["_id"])
+            all_videos.append(video)
         
         return {
             "success": True,
@@ -125,7 +95,7 @@ async def add_videos_to_course(
                 "course_id": course_id,
                 "videos_added": len(new_videos_list),
                 "total_videos": len(all_videos),
-                "new_videos": new_videos_list,
+                "new_video_ids": [str(vid_id) for vid_id in new_video_ids],
                 "all_videos": all_videos
             }
         }

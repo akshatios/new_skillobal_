@@ -23,3 +23,4 @@ contact_collection = db.contact
 categories_collection = db.categories
 admins_collection = db.admins
 question_and_answer_collection = db["Q&A"]
+languages_collection = db.languages

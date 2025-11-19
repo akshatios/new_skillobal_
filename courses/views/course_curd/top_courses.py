@@ -66,7 +66,7 @@ async def get_top_courses(
                 "id": str(doc.get("_id")),
                 "title": doc.get("title"),
                 "description": doc.get("description"),
-                "image_url": doc.get("imageUrl") or doc.get("course_image_url"),
+                "image_url": doc.get("images", [{}])[0].get("course_image_url") if doc.get("images") else None,
                 "rating": doc.get("rating"),
                 "price": doc.get("price"),
                 "visible": doc.get("visible"),

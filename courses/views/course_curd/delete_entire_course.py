@@ -33,31 +33,37 @@ async def delete_entire_course(
         deleted_files = []
         failed_deletions = []
         
-        # Delete course images from Tencent VOD
+        # Delete course image from Tencent VOD
         if "images" in course and course["images"]:
-            for image in course["images"]:
-                if "fileId" in image and image["fileId"]:
-                    success = await delete_from_tencent_vod_image(image["fileId"])
-                    if success:
-                        deleted_files.append(f"Image: {image['fileId']}")
-                    else:
-                        failed_deletions.append(f"Image: {image['fileId']}")
+            image = course["images"]
+            if "fileId" in image and image["fileId"]:
+                success = await delete_from_tencent_vod_image(image["fileId"])
+                if success:
+                    deleted_files.append(f"Image: {image['fileId']}")
+                else:
+                    failed_deletions.append(f"Image: {image['fileId']}")
         
-        # Delete intro videos from Tencent VOD
+        # Delete intro video from Tencent VOD
         if "intro_videos" in course and course["intro_videos"]:
-            for intro_video in course["intro_videos"]:
-                if "fileId" in intro_video and intro_video["fileId"]:
-                    success = await delete_from_tencent_vod(intro_video["fileId"])
-                    if success:
-                        deleted_files.append(f"Intro Video: {intro_video['fileId']}")
-                    else:
-                        failed_deletions.append(f"Intro Video: {intro_video['fileId']}")
+            intro_video = course["intro_videos"]
+            if "fileId" in intro_video and intro_video["fileId"]:
+                success = await delete_from_tencent_vod(intro_video["fileId"])
+                if success:
+                    deleted_files.append(f"Intro Video: {intro_video['fileId']}")
+                else:
+                    failed_deletions.append(f"Intro Video: {intro_video['fileId']}")
         
-        # Delete course videos from Tencent VOD and video container
+        # Delete course videos from Tencent VOD and individual video documents
         if "videos" in course and course["videos"]:
-            video_container = await courses_videos_collection.find_one({"_id": course["videos"]})
-            if video_container and "videos" in video_container:
-                for video in video_container["videos"]:
+            video_ids = course["videos"]
+            # Ensure videos is an array
+            if not isinstance(video_ids, list):
+                # Handle old format where videos was single ObjectId
+                video_ids = [video_ids] if video_ids else []
+            
+            if video_ids:
+                videos_cursor = courses_videos_collection.find({"_id": {"$in": video_ids}})
+                async for video in videos_cursor:
                     if "fileId" in video and video["fileId"]:
                         success = await delete_from_tencent_vod(video["fileId"])
                         if success:
@@ -65,8 +71,8 @@ async def delete_entire_course(
                         else:
                             failed_deletions.append(f"Video: {video['fileId']}")
                 
-                # Delete video container from database
-                await courses_videos_collection.delete_one({"_id": course["videos"]})
+                # Delete all video documents from database
+                await courses_videos_collection.delete_many({"_id": {"$in": video_ids}})
         
         # Delete course from database
         await courses_collection.delete_one({"_id": ObjectId(course_id)})

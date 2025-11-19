@@ -16,7 +16,7 @@ async def update_course(
     title: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
     category_id: Optional[str] = Form(None),
-    language: Optional[str] = Form(None),
+    language_id: Optional[str] = Form(None),
     visible: Optional[bool] = Form(None),
     course_image_url: Optional[UploadFile] = File(None),
     course_intro_video: Optional[UploadFile] = File(None),
@@ -48,8 +48,8 @@ async def update_course(
             update_data["description"] = description
         if category_id is not None:
             update_data["category_id"] = ObjectId(category_id) if category_id != "string" else None
-        if language is not None:
-            update_data["language"] = language
+        if language_id is not None:
+            update_data["language_id"] = ObjectId(language_id) if language_id != "string" else None
         if visible is not None:
             update_data["visible"] = visible
         if rating is not None:
@@ -63,9 +63,9 @@ async def update_course(
         if course_image_url and course_image_url.filename:
             # Get old image fileId for deletion
             if "images" in existing_course and existing_course["images"]:
-                for old_image in existing_course["images"]:
-                    if "fileId" in old_image and old_image["fileId"]:
-                        old_files_to_delete.append(old_image["fileId"])
+                old_image = existing_course["images"]
+                if "fileId" in old_image and old_image["fileId"]:
+                    old_files_to_delete.append(old_image["fileId"])
             
             # Upload new image
             course_image_content = await course_image_url.read()
@@ -73,20 +73,20 @@ async def update_course(
             
             new_image_obj = {
                 "fileId": course_image_result["file_id"],
-                "imageUrl": course_image_result["image_url"],
+                "course_image_url": course_image_result["image_url"],
                 "type": "course_image",
                 "uploaded_at": current_time
             }
-            update_data["images"] = [new_image_obj]
+            update_data["images"] = new_image_obj
             logger.info(f"New course image uploaded: {course_image_result['file_id']}")
         
         # Handle intro video update
         if course_intro_video and course_intro_video.filename:
             # Get old intro video fileId for deletion
             if "intro_videos" in existing_course and existing_course["intro_videos"]:
-                for old_intro_video in existing_course["intro_videos"]:
-                    if "fileId" in old_intro_video and old_intro_video["fileId"]:
-                        old_files_to_delete.append(old_intro_video["fileId"])
+                old_intro_video = existing_course["intro_videos"]
+                if "fileId" in old_intro_video and old_intro_video["fileId"]:
+                    old_files_to_delete.append(old_intro_video["fileId"])
             
             # Upload new intro video
             course_intro_video_content = await course_intro_video.read()
@@ -98,7 +98,7 @@ async def update_course(
                 "type": "intro_video",
                 "uploaded_at": current_time
             }
-            update_data["intro_videos"] = [new_intro_video_obj]
+            update_data["intro_videos"] = new_intro_video_obj
             logger.info(f"New intro video uploaded: {course_intro_video_result['file_id']}")
         
         # Update course in database
@@ -136,15 +136,15 @@ async def update_course(
             "title": updated_course["title"],
             "description": updated_course["description"],
             "category_id": str(updated_course["category_id"]) if updated_course.get("category_id") else None,
-            "language": updated_course["language"],
+            "language_id": str(updated_course["language_id"]) if updated_course.get("language_id") else None,
             "visible": updated_course["visible"],
             "rating": updated_course.get("rating", 0.0),
             "price": updated_course.get("price", 0.0),
             "instructor_id": str(updated_course["instructor_id"]) if updated_course.get("instructor_id") else None,
-            "images": updated_course.get("images", []),
-            "intro_videos": updated_course.get("intro_videos", []),
-            "image_url": updated_course["images"][0]["imageUrl"] if updated_course.get("images") else None,
-            "intro_video": updated_course["intro_videos"][0]["videoUrl"] if updated_course.get("intro_videos") else None,
+            "images": updated_course.get("images"),
+            "intro_videos": updated_course.get("intro_videos"),
+            "image_url": updated_course["images"]["course_image_url"] if updated_course.get("images") else None,
+            "intro_video": updated_course["intro_videos"]["videoUrl"] if updated_course.get("intro_videos") else None,
             "updated_at": current_time,
             "cleanup_info": {
                 "old_files_deleted": deleted_files,

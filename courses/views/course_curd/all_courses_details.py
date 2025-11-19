@@ -35,14 +35,14 @@ async def get_all_courses_details(
         for course in courses:
             if "videos" in course and course["videos"]:
                 try:
-                    # Get video container details
-                    video_container = await courses_videos_collection.find_one({"_id": course["videos"]})
-                    if video_container and "videos" in video_container:
-                        course["videos_details"] = video_container["videos"]
-                        course["total_videos"] = len(video_container["videos"])
-                    else:
-                        course["videos_details"] = []
-                        course["total_videos"] = 0
+                    # Get individual video documents
+                    videos_cursor = courses_videos_collection.find({"_id": {"$in": course["videos"]}})
+                    videos_details = []
+                    async for video in videos_cursor:
+                        video["_id"] = str(video["_id"])
+                        videos_details.append(video)
+                    course["videos_details"] = videos_details
+                    course["total_videos"] = len(videos_details)
                 except Exception as e:
                     course["videos_details"] = []
                     course["total_videos"] = 0

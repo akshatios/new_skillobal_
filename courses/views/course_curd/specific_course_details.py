@@ -32,17 +32,18 @@ async def get_specific_course_details(
         # Fetch complete video details
         if "videos" in course and course["videos"]:
             try:
-                # Get video container details
-                video_container = await courses_videos_collection.find_one({"_id": course["videos"]})
-                if video_container and "videos" in video_container:
-                    course["videos_details"] = video_container["videos"]
-                    course["total_videos"] = len(video_container["videos"])
-                    
-                    # Sort videos by order
-                    course["videos_details"].sort(key=lambda x: x.get("order", 0))
-                else:
-                    course["videos_details"] = []
-                    course["total_videos"] = 0
+                # Get individual video documents
+                videos_cursor = courses_videos_collection.find({"_id": {"$in": course["videos"]}})
+                videos_details = []
+                async for video in videos_cursor:
+                    video["_id"] = str(video["_id"])
+                    videos_details.append(video)
+                
+                # Sort videos by order
+                videos_details.sort(key=lambda x: x.get("order", 0))
+                
+                course["videos_details"] = videos_details
+                course["total_videos"] = len(videos_details)
             except Exception as e:
                 course["videos_details"] = []
                 course["total_videos"] = 0
@@ -52,19 +53,19 @@ async def get_specific_course_details(
         
         # Add summary statistics
         course["summary"] = {
-            "total_images": len(course.get("images", [])),
-            "total_intro_videos": len(course.get("intro_videos", [])),
+            "total_images": 1 if course.get("images") else 0,
+            "total_intro_videos": 1 if course.get("intro_videos") else 0,
             "total_course_videos": course["total_videos"],
             "has_content": (
-                len(course.get("images", [])) > 0 or 
-                len(course.get("intro_videos", [])) > 0 or 
+                course.get("images") is not None or 
+                course.get("intro_videos") is not None or 
                 course["total_videos"] > 0
             )
         }
         
         # Add backward compatibility fields
-        course["image_url"] = course["images"][0]["imageUrl"] if course.get("images") else None
-        course["intro_video"] = course["intro_videos"][0]["videoUrl"] if course.get("intro_videos") else None
+        course["image_url"] = course["images"]["course_image_url"] if course.get("images") else None
+        course["intro_video"] = course["intro_videos"]["videoUrl"] if course.get("intro_videos") else None
         
         # Convert ObjectIds to strings
         course = convert_objectids(course)

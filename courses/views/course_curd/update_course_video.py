@@ -29,42 +29,37 @@ async def update_course_video_by_fileid(
         if not existing_course:
             raise HTTPException(status_code=404, detail="Course not found")
         
-        # Check if course has videos container
+        # Check if course has videos
         if "videos" not in existing_course or not existing_course["videos"]:
             raise HTTPException(status_code=404, detail="Course has no videos")
         
-        # Get video container
-        video_container = await courses_videos_collection.find_one({"_id": existing_course["videos"]})
-        if not video_container or "videos" not in video_container:
-            raise HTTPException(status_code=404, detail="Video container not found")
+        # Handle both old and new video formats
+        video_ids = existing_course["videos"]
+        if not isinstance(video_ids, list):
+            video_ids = [video_ids] if video_ids else []
         
-        # Find video by fileId
-        videos_list = video_container["videos"]
-        video_index = -1
-        target_video = None
+        # Find video document by fileId
+        target_video = await courses_videos_collection.find_one({
+            "_id": {"$in": video_ids},
+            "fileId": file_id
+        })
         
-        for i, video in enumerate(videos_list):
-            if video.get("fileId") == file_id:
-                video_index = i
-                target_video = video
-                break
-        
-        if video_index == -1:
+        if not target_video:
             raise HTTPException(status_code=404, detail=f"Video with fileId {file_id} not found")
         
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         old_file_to_delete = None
         
-        # Prepare updated video data
-        updated_video = target_video.copy()
+        # Prepare update data
+        update_data = {"updated_at": current_time}
         
         # Update metadata fields if provided
         if video_title is not None:
-            updated_video["video_title"] = video_title
+            update_data["video_title"] = video_title
         if video_description is not None:
-            updated_video["video_description"] = video_description
+            update_data["video_description"] = video_description
         if video_order is not None:
-            updated_video["order"] = video_order
+            update_data["order"] = video_order
         
         # Handle video file replacement
         if video_file and video_file.filename:
@@ -76,20 +71,20 @@ async def update_course_video_by_fileid(
             video_result = await upload_to_tencent_vod(video_content, video_file.filename)
             
             # Update video with new file data
-            updated_video["fileId"] = video_result["file_id"]
-            updated_video["videoUrl"] = video_result["video_url"]
-            updated_video["updated_at"] = current_time
+            update_data["fileId"] = video_result["file_id"]
+            update_data["videoUrl"] = video_result["video_url"]
             
             logger.info(f"New video uploaded: {video_result['file_id']}")
         
-        # Update video in the list
-        videos_list[video_index] = updated_video
-        
-        # Update video container in database
+        # Update video document in database
         await courses_videos_collection.update_one(
-            {"_id": existing_course["videos"]},
-            {"$set": {"videos": videos_list, "updated_at": current_time}}
+            {"_id": target_video["_id"]},
+            {"$set": update_data}
         )
+        
+        # Get updated video for response
+        updated_video = await courses_videos_collection.find_one({"_id": target_video["_id"]})
+        updated_video["_id"] = str(updated_video["_id"])
         
         # Background cleanup: Delete old video file from Tencent
         if old_file_to_delete:
@@ -108,9 +103,7 @@ async def update_course_video_by_fileid(
             "data": {
                 "course_id": course_id,
                 "updated_video": updated_video,
-                "video_index": video_index,
-                "old_file_deleted": old_file_to_delete if old_file_to_delete else None,
-                "total_videos": len(videos_list)
+                "old_file_deleted": old_file_to_delete if old_file_to_delete else None
             }
         }
         
@@ -136,36 +129,35 @@ async def delete_course_video_by_fileid(
         if not existing_course:
             raise HTTPException(status_code=404, detail="Course not found")
         
-        # Check if course has videos container
+        # Check if course has videos
         if "videos" not in existing_course or not existing_course["videos"]:
             raise HTTPException(status_code=404, detail="Course has no videos")
         
-        # Get video container
-        video_container = await courses_videos_collection.find_one({"_id": existing_course["videos"]})
-        if not video_container or "videos" not in video_container:
-            raise HTTPException(status_code=404, detail="Video container not found")
+        # Handle both old and new video formats
+        video_ids = existing_course["videos"]
+        if not isinstance(video_ids, list):
+            video_ids = [video_ids] if video_ids else []
         
-        # Find and remove video by fileId
-        videos_list = video_container["videos"]
-        video_to_delete = None
-        updated_videos = []
-        
-        for video in videos_list:
-            if video.get("fileId") == file_id:
-                video_to_delete = video
-            else:
-                updated_videos.append(video)
+        # Find video document by fileId
+        video_to_delete = await courses_videos_collection.find_one({
+            "_id": {"$in": video_ids},
+            "fileId": file_id
+        })
         
         if not video_to_delete:
             raise HTTPException(status_code=404, detail=f"Video with fileId {file_id} not found")
         
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Remove video from course videos array
+        updated_video_ids = [vid_id for vid_id in video_ids if vid_id != video_to_delete["_id"]]
         
-        # Update video container in database
-        await courses_videos_collection.update_one(
-            {"_id": existing_course["videos"]},
-            {"$set": {"videos": updated_videos, "updated_at": current_time}}
+        # Update course with new video IDs array
+        await courses_collection.update_one(
+            {"_id": ObjectId(course_id)},
+            {"$set": {"videos": updated_video_ids}}
         )
+        
+        # Delete video document
+        await courses_videos_collection.delete_one({"_id": video_to_delete["_id"]})
         
         # Delete video from Tencent
         deleted_from_tencent = False
@@ -184,9 +176,13 @@ async def delete_course_video_by_fileid(
             "message": "Course video deleted successfully",
             "data": {
                 "course_id": course_id,
-                "deleted_video": video_to_delete,
+                "deleted_video": {
+                    "_id": str(video_to_delete["_id"]),
+                    "fileId": video_to_delete["fileId"],
+                    "video_title": video_to_delete.get("video_title")
+                },
                 "deleted_from_tencent": deleted_from_tencent,
-                "remaining_videos": len(updated_videos)
+                "remaining_videos": len(updated_video_ids)
             }
         }
         
