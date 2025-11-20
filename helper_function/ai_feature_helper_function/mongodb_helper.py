@@ -6,7 +6,7 @@ Updated to handle new video storage format and batch processing.
 import aiohttp
 from pathlib import Path
 from bson import ObjectId
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 async def download_video_from_url(video_url: str, save_path: Path) -> None:
     """
@@ -15,6 +15,37 @@ async def download_video_from_url(video_url: str, save_path: Path) -> None:
     Args:
         video_url: URL of the video to download
         save_path: Local path where video will be saved
+
+    # Case 1: New Course (No videos have questions)
+    last_video_with_questions = None
+    first_idx_without_questions = 0
+    # Case 1: what we will do
+    starting_cumulative_summary = ""
+    videos_to_process = all_videos[0:]  # Process all
+
+    # Case 2: Adding at End
+    # [v1✓, v2✓, v3✓, v4, v5]
+    last_video_with_questions = v3 document as json 
+    first_idx_without_questions = 3
+    # Case 2: what we will do
+    starting_cumulative_summary = v3's cumulative_summary_up_to_here
+    videos_to_process = [v4, v5]
+
+    # Case 3: Adding in Between
+    # [v1✓, v1.1, v1.2, v2✓, v3✓]
+    last_video_with_questions = v1 document as json
+    first_idx_without_questions = 1 
+    # Case 3: what we will do
+    starting_cumulative_summary = v1's cumulative_summary_up_to_here
+    videos_to_process = [v1.1, v1.2, v2, v3]  # Regenerate v2 and v3!
+
+    # Case 4: Adding at Beginning
+    # [v0.1, v0.2, v1✓, v2✓]
+    last_video_with_questions = None
+    first_idx_without_questions = 0
+    # Case 4: what we will do
+    starting_cumulative_summary = ""
+    videos_to_process = [v0.1, v0.2, v1, v2]  # Regenerate all!
     """
     try:
         async with aiohttp.ClientSession() as session:
@@ -32,13 +63,13 @@ async def download_video_from_url(video_url: str, save_path: Path) -> None:
         raise Exception(f"Video download failed: {err}")
 
 
-async def fetch_course_videos(
+async def fetch_course_videos_with_questions(
     course_id: str,
     courses_collection,
     courses_videos_collection
-) -> Tuple[List[Dict[str, Any]], List[str]]:
+) -> Tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]], int]:
     """
-    Fetch all videos for a course from MongoDB, filtering only ObjectId entries.
+    Fetch all videos for a course and identify which ones need question generation.
     
     Args:
         course_id: String ID of the course
@@ -46,7 +77,11 @@ async def fetch_course_videos(
         courses_videos_collection: MongoDB courses_videos collection
         
     Returns:
-        Tuple of (list of video objects, list of skipped non-ObjectId entries)
+        Tuple of:
+        - List of ALL video documents (sorted by order)
+        - List of skipped non-ObjectId entries
+        - Last video WITH questions (or None if no videos have questions)
+        - Index of first video WITHOUT questions (-1 if all have questions)
     """
     try:
         # Step 1: Find course document
@@ -84,7 +119,24 @@ async def fetch_course_videos(
         # Step 5: Sort videos by order field
         sorted_videos = sorted(video_docs, key=lambda x: int(x.get("order", 0)))
         
-        return sorted_videos, skipped_items
+        # Step 6: Find first video without questions
+        first_without_questions_idx = -1
+        last_with_questions = None
+        
+        for idx, video in enumerate(sorted_videos):
+            has_questions = (
+                "ai_generated_content" in video and 
+                video["ai_generated_content"].get("individual_questions") is not None
+            )
+            
+            if not has_questions:
+                if first_without_questions_idx == -1:
+                    first_without_questions_idx = idx
+            else:
+                # Track last video with questions (before gap)
+                if first_without_questions_idx == -1:
+                    last_with_questions = video
+        return sorted_videos, skipped_items, last_with_questions, first_without_questions_idx
         
     except Exception as err:
         raise Exception(f"Failed to fetch course videos: {err}")

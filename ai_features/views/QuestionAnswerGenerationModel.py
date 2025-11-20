@@ -29,7 +29,6 @@ from helper_function.ai_feature_helper_function.schema_definitions import (
 )
 from helper_function.ai_feature_helper_function.video_to_pdf_function import (
     split_pdf, 
-    write_file, 
     audio_to_text,
     video_to_audio, 
     save_text_to_pdf,
@@ -39,8 +38,8 @@ from helper_function.ai_feature_helper_function.mongodb_helper import (
     chunk_videos,
     save_video_results,
     cleanup_batch_files,
-    fetch_course_videos,
     download_video_from_url,
+    fetch_course_videos_with_questions
 )
 
 def init_models():
@@ -53,18 +52,18 @@ def init_models():
         cumulative_summary_model = ChatOpenAI(model="gpt-5.1-2025-11-13")
         
         # Multiple models for question generation (parallel processing)
+        question_models = {
+            "openai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
+            # "anthropic": ChatOpenAI(model="gpt-5.1-2025-11-13"),
+            "xai": ChatXAI(model="grok-4-fast-reasoning"),
+            "google": ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+        }
         # question_models = {
         #     "openai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
         #     "anthropic": ChatOpenAI(model="gpt-5.1-2025-11-13"),
-        #     "xai": ChatXAI(model="grok-4-fast-reasoning"),
-        #     "google": ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+        #     "xai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
+        #     "google": ChatOpenAI(model="gpt-5.1-2025-11-13")
         # }
-        question_models = {
-            "openai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
-            "anthropic": ChatOpenAI(model="gpt-5.1-2025-11-13"),
-            "xai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
-            "google": ChatOpenAI(model="gpt-5.1-2025-11-13")
-        }
         
         # Question selection model (best question picker)
         selection_model = ChatOpenAI(model="gpt-5.1-2025-11-13")
@@ -325,14 +324,20 @@ async def QuestionAnswerGenerationModel(
     hinglish: bool = Form(...)
 ):
     """
-    Main API endpoint for question generation from course videos stored in MongoDB.
+    UNIFIED API for question generation - handles both new courses and adding new videos.
     
-    NEW ARCHITECTURE:
-    1. Fetches videos from courses collection (filters ObjectIds only)
-    2. Processes 5 videos per batch to prevent RAM overflow
-    3. Saves summaries and questions directly to individual video documents
-    4. Video 1: 2 question types (both focus on video 1)
-    5. Videos 2+: 2 question types (individual + cumulative)
+    CASES HANDLED:
+    1. New Course: All videos need questions (start_idx = 0, no previous summary)
+    2. Adding at End: [v1✓, v2✓, v3✓, v4✓, v5, v6] (start_idx = 4)
+    3. Adding in Between: [v1✓, v1.1, v1.2, v2✓, v3✓] (start_idx = 1, regenerate v2, v3)
+    4. Adding at Beginning: [v0.1, v0.2, v1✓, v2✓] (start_idx = 0, regenerate all)
+    5. Mixed: Any combination of above
+    
+    LOGIC:
+    - Find first video WITHOUT questions
+    - Use previous video's cumulative_summary_up_to_here (or "" if none)
+    - Generate questions from that point to the end
+    - Regenerate questions for videos that come after (even if they had questions)
     """
     try:
         # Validation
@@ -347,21 +352,51 @@ async def QuestionAnswerGenerationModel(
                 status_code=400
             )
         
-        # Fetch videos from MongoDB (only ObjectIds)
-        videos, skipped_items = await fetch_course_videos(
+        # Fetch videos and identify which need processing
+        (
+            all_videos, 
+            skipped_items, 
+            last_video_with_questions, 
+            first_idx_without_questions
+        ) = await fetch_course_videos_with_questions(
             course_id=course_id,
             courses_collection=courses_collection,
             courses_videos_collection=courses_videos_collection
         )
         
-        if not videos:
+        if not all_videos:
             return JSONResponse(
                 content={"message": "No valid video ObjectIds found for this course"},
-                status_code=404
+                status_code=200
             )
         
-        # Split videos into batches of 5
-        video_batches = chunk_videos(videos, batch_size=5)
+        # Determine processing range
+        if first_idx_without_questions == -1:
+            # All videos already have questions
+            return JSONResponse(
+                content={
+                    "message": "All videos already have questions generated",
+                    "total_videos": len(all_videos)
+                },
+                status_code=200
+            )
+        
+        # Get starting cumulative summary
+        if last_video_with_questions:
+            starting_cumulative_summary = (
+                last_video_with_questions
+                .get("ai_generated_content", {})
+                .get("cumulative_summary_up_to_here", "")
+            )
+        else:
+            starting_cumulative_summary = ""
+        
+        # Videos to process: from first_idx_without_questions to end
+        videos_to_process = all_videos[first_idx_without_questions:]
+        
+        # Split into batches of 5
+        video_batches = chunk_videos(videos_to_process, batch_size=5)
+        
         # Initialize
         all_paths = await paths()
         (
@@ -378,9 +413,12 @@ async def QuestionAnswerGenerationModel(
         cumulative_summary_chain = create_cumulative_summary_chain(cumulative_summary_model)
         
         # Tracking variables
-        all_previous_cumulative_summary = ""
+        current_cumulative_summary = starting_cumulative_summary
         total_videos_processed = 0
         processed_video_ids = []
+        
+        # Calculate global video indices (relative to ALL videos in course)
+        start_global_idx = first_idx_without_questions
         
         # Process each batch
         for batch_idx, batch_videos in enumerate(video_batches):
@@ -389,14 +427,11 @@ async def QuestionAnswerGenerationModel(
             
             # Store paths to clean up after batch
             batch_cleanup_paths = [batch_paths["batch_dir"]]
-            print("there is a new batch", batch_idx)
+            
             try:
-                
                 # Process each video in batch
                 for video_idx_in_batch, video_doc in enumerate(batch_videos):
-                    print(video_idx_in_batch, video_doc)
-
-                    global_video_idx = total_videos_processed
+                    global_video_idx = start_global_idx + total_videos_processed
                     
                     # Process video to get summaries
                     video_id, video_title, concise_summary, detailed_summary = await process_single_video(
@@ -419,20 +454,20 @@ async def QuestionAnswerGenerationModel(
                     )
                     
                     # Update cumulative summary
-                    if total_videos_processed == 0:
-                        # First video: cumulative = individual
-                        all_previous_cumulative_summary = concise_summary
+                    if current_cumulative_summary == "":
+                        # First video in processing range
+                        current_cumulative_summary = concise_summary
                         cumulative_questions = individual_questions  # For consistency
                         cumulative_summary_up_to_here = concise_summary
                     else:
-                        # Videos 2+: combine with previous summaries
+                        # Subsequent videos: combine with previous summaries
                         cumulative_result = await cumulative_summary_chain.ainvoke({
-                            "previous_lectures_summary": all_previous_cumulative_summary,
+                            "previous_lectures_summary": current_cumulative_summary,
                             "new_lecture_summary": concise_summary,
-                            "lecture_number": total_videos_processed + 1
+                            "lecture_number": global_video_idx + 1
                         })
                         cumulative_summary_up_to_here = cumulative_result["combined_summary"]
-                        all_previous_cumulative_summary = cumulative_summary_up_to_here
+                        current_cumulative_summary = cumulative_summary_up_to_here
                         
                         # Generate cumulative questions
                         cumulative_questions = await generate_questions_for_lecture(
@@ -465,7 +500,6 @@ async def QuestionAnswerGenerationModel(
             finally:
                 # Clean up batch files to free RAM
                 await cleanup_batch_files(batch_cleanup_paths)
-                pass
         
         # Final cleanup
         await cleanup(all_paths)
@@ -474,9 +508,12 @@ async def QuestionAnswerGenerationModel(
             content={
                 "message": "Question generation completed successfully",
                 "course_id": course_id,
-                "total_videos_processed": total_videos_processed,
+                "total_videos_in_course": len(all_videos),
+                "videos_processed": total_videos_processed,
                 "processed_video_ids": processed_video_ids,
-                "skipped_items": skipped_items if skipped_items else None
+                "started_from_index": first_idx_without_questions,
+                "skipped_items": skipped_items if skipped_items else None,
+                "had_previous_questions": last_video_with_questions is not None
             },
             status_code=200
         )
@@ -484,7 +521,6 @@ async def QuestionAnswerGenerationModel(
     except Exception as err:
         try:
             await cleanup(all_paths)
-            pass
         except:
             pass
         
