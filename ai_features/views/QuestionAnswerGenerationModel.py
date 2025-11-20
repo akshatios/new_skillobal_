@@ -1,24 +1,20 @@
-import io
-import json
 import uuid
 import shutil
-import zipfile
 import asyncio
-from typing import List
 from pathlib import Path
 from datetime import datetime
 from langchain_xai import ChatXAI
 from core.config import ai_api_secrets
 from langchain_openai import ChatOpenAI
+from fastapi import Request, Form, Depends
+from fastapi.responses import JSONResponse
 from langchain_core.runnables import RunnableParallel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from helper_function.apis_requests import get_current_user
-from fastapi import Request, UploadFile, File, Form, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.runnables.passthrough import RunnableAssign
+from core.database import courses_collection, courses_videos_collection
 from helper_function.ai_feature_helper_function.runnable_lambda import extract_summary, extract_questions
-from core.database import courses_collection, courses_videos_collection, course_question_and_answers_collection
 
 from helper_function.ai_feature_helper_function.prompt_templates import (
     summary_prompt, 
@@ -40,10 +36,11 @@ from helper_function.ai_feature_helper_function.video_to_pdf_function import (
     sanitize_question_dict
 )
 from helper_function.ai_feature_helper_function.mongodb_helper import (
+    chunk_videos,
+    save_video_results,
+    cleanup_batch_files,
     fetch_course_videos,
     download_video_from_url,
-    save_results_to_mongodb,
-    chunk_videos
 )
 
 def init_models():
@@ -56,18 +53,18 @@ def init_models():
         cumulative_summary_model = ChatOpenAI(model="gpt-5.1-2025-11-13")
         
         # Multiple models for question generation (parallel processing)
-        question_models = {
-            "openai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
-            "anthropic": ChatOpenAI(model="gpt-5.1-2025-11-13"),
-            "xai": ChatXAI(model="grok-4-fast-reasoning"),
-            "google": ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-        }
         # question_models = {
         #     "openai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
         #     "anthropic": ChatOpenAI(model="gpt-5.1-2025-11-13"),
-        #     "xai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
-        #     "google": ChatOpenAI(model="gpt-5.1-2025-11-13")
+        #     "xai": ChatXAI(model="grok-4-fast-reasoning"),
+        #     "google": ChatGoogleGenerativeAI(model="gemini-2.5-flash")
         # }
+        question_models = {
+            "openai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
+            "anthropic": ChatOpenAI(model="gpt-5.1-2025-11-13"),
+            "xai": ChatOpenAI(model="gpt-5.1-2025-11-13"),
+            "google": ChatOpenAI(model="gpt-5.1-2025-11-13")
+        }
         
         # Question selection model (best question picker)
         selection_model = ChatOpenAI(model="gpt-5.1-2025-11-13")
@@ -98,32 +95,38 @@ async def paths():
         base_dir = ai_api_secrets.BASE_DIR 
         request_id = str(uuid.uuid4())
         data_dir = base_dir / "data" / request_id
-        output_dir = data_dir / "output"
         
         all_paths = {
             "base_dir": base_dir,
             "data_dir": data_dir,
-            "output_dir": output_dir,
-            "input_video_dir": data_dir / "input_video",
-            "input_audio_dir": data_dir / "input_audio",
-            "input_text_dir": data_dir / "input_text",
-            "input_pdf_dir": data_dir / "input_pdf",
-            "split_pdf_dir": data_dir / "split_pdf",
-            "lecture_summaries_dir": output_dir / "lecture_summaries",
-            "lecture_questions_dir": output_dir / "lecture_questions",
-            "cumulative_questions_dir": output_dir / "cumulative_questions",
-            "all_previous_lecture_summary_file": output_dir / "all_previous_lecture_summary.txt",
             "font_path": base_dir / "helper_function" / "ai_feature_helper_function" /"font" / "Poppins-Regular.ttf"
         }
         
-        # Create all directories
-        for key, path in all_paths.items():
-            if key.endswith("_dir"):
-                await asyncio.to_thread(path.mkdir, exist_ok=True, parents=True)
+        # Create base data directory
+        await asyncio.to_thread(data_dir.mkdir, exist_ok=True, parents=True)
         
         return all_paths
     except Exception as err:
         raise Exception(f"Path creation failed: {err}")
+
+async def create_batch_paths(base_data_dir: Path, batch_idx: int):
+    """Create paths for a specific batch to isolate memory usage"""
+    batch_dir = base_data_dir / f"batch_{batch_idx}"
+    
+    batch_paths = {
+        "batch_dir": batch_dir,
+        "input_video_dir": batch_dir / "input_video",
+        "input_audio_dir": batch_dir / "input_audio",
+        "input_text_dir": batch_dir / "input_text",
+        "input_pdf_dir": batch_dir / "input_pdf",
+        "split_pdf_dir": batch_dir / "split_pdf"
+    }
+    
+    # Create all directories
+    for path in batch_paths.values():
+        await asyncio.to_thread(path.mkdir, exist_ok=True, parents=True)
+    
+    return batch_paths
 
 async def pdf_loader(pdf_path: Path) -> str:
     """Load PDF and extract text"""
@@ -238,57 +241,73 @@ async def generate_questions_for_lecture(
     except Exception as err:
         raise Exception(f"Question generation failed: {err}")
 
-async def process_single_lecture(
-    lecture_idx: int,
-    lecture_pdf_path: Path,
-    split_pdf_dir: Path,
+async def process_single_video(
+    video_doc: dict,
+    video_idx_in_batch: int,
+    global_video_idx: int,
+    batch_paths: dict,
+    font_path: Path,
     summary_chain,
     number_of_questions: int,
-    lecture_summaries_dir: Path
+    hinglish: bool
 ) -> tuple:
-    """Process a single lecture to generate page-wise summaries"""
+    """Process a single video to generate summaries"""
     try:
+        video_id = str(video_doc["_id"])
+        video_url = video_doc.get("videoUrl")
+        video_title = video_doc.get("video_title", f"Video {global_video_idx + 1}")
         
+        if not video_url:
+            raise Exception(f"No videoUrl found for video {video_title}")
         
+        # Download video
+        video_target = batch_paths["input_video_dir"] / f"video_{video_idx_in_batch}.mp4"
+        await download_video_from_url(video_url, video_target)
+        
+        # Convert to audio
+        audio_target = batch_paths["input_audio_dir"] / f"video_{video_idx_in_batch}.mp3"
+        await video_to_audio(video_target, output_path=audio_target)
+        
+        # Transcribe
+        text_file_path = batch_paths["input_text_dir"] / f"video_{video_idx_in_batch}.txt"
+        await audio_to_text(
+            path=audio_target,
+            text_file_path=text_file_path,
+            hinglish=hinglish
+        )
+        
+        # Convert to PDF
+        pdf_path = batch_paths["input_pdf_dir"] / f"video_{video_idx_in_batch}.pdf"
+        await save_text_to_pdf(
+            text_file_path=text_file_path,
+            output_path=pdf_path,
+            font_path=font_path
+        )
         
         # Split PDF into pages
-        total_pages = await split_pdf(lecture_pdf_path, split_pdf_dir)
+        video_split_dir = batch_paths["split_pdf_dir"] / f"video_{video_idx_in_batch}"
+        await asyncio.to_thread(video_split_dir.mkdir, parents=True, exist_ok=True)
+        total_pages = await split_pdf(pdf_path, video_split_dir)
         
-        
-        # Process each page sequentially
+        # Process each page
         cumulative_concise = ""
         cumulative_detailed = ""
         
         for page_num in range(total_pages):
-            
-            
             concise, detailed = await process_single_page(
                 page_num=page_num,
-                split_pdf_dir=split_pdf_dir,
+                split_pdf_dir=video_split_dir,
                 previous_pages_summary=cumulative_concise,
                 summary_chain=summary_chain,
                 number_of_questions=number_of_questions
             )
-            
             cumulative_concise += concise
             cumulative_detailed += detailed
-            
-            # Save progress after each page
-            await asyncio.gather(
-                write_file(
-                    lecture_summaries_dir / f"lecture_{lecture_idx + 1}_concise_summary.txt",
-                    cumulative_concise
-                ),
-                write_file(
-                    lecture_summaries_dir / f"lecture_{lecture_idx + 1}_detailed_summary.txt",
-                    cumulative_detailed
-                )
-            )
         
+        return video_id, video_title, cumulative_concise, cumulative_detailed
         
-        return cumulative_concise, cumulative_detailed
     except Exception as err:
-        raise Exception(f"Lecture processing failed for lecture {lecture_idx}: {err}")
+        raise Exception(f"Video processing failed for {video_doc.get('video_title', 'unknown')}: {err}")
 
 async def cleanup(all_paths):
     """Clean up temporary files"""
@@ -296,23 +315,24 @@ async def cleanup(all_paths):
         if all_paths["data_dir"].exists():
             await asyncio.to_thread(shutil.rmtree, all_paths["data_dir"])
     except Exception as err:
-        raise Exception(f"Cleanup failed: {err}")
+        pass  # Ignore cleanup errors
 
 async def QuestionAnswerGenerationModel(
-    request: Request, token: str = Depends(get_current_user), 
-    course_id: str = Form(...),  # CHANGED: Now takes course_id instead of uploaded files
+    request: Request, 
+    token: str = Depends(get_current_user), 
+    course_id: str = Form(...),
     number_of_questions: int = Form(...),
     hinglish: bool = Form(...)
 ):
     """
     Main API endpoint for question generation from course videos stored in MongoDB.
     
-    CHANGES:
-    1. Takes course_id as input instead of uploaded files
-    2. Fetches videos from MongoDB
-    3. Downloads videos from URLs
-    4. Processes videos in batches of 5
-    5. Saves results to MongoDB collection
+    NEW ARCHITECTURE:
+    1. Fetches videos from courses collection (filters ObjectIds only)
+    2. Processes 5 videos per batch to prevent RAM overflow
+    3. Saves summaries and questions directly to individual video documents
+    4. Video 1: 2 question types (both focus on video 1)
+    5. Videos 2+: 2 question types (individual + cumulative)
     """
     try:
         # Validation
@@ -327,12 +347,8 @@ async def QuestionAnswerGenerationModel(
                 status_code=400
             )
         
-        # NEW: Fetch videos from MongoDB
-        # print(f"\n{'='*60}")
-        # print(f"Fetching videos for course ID: {course_id}")
-        # print(f"{'='*60}")
-        
-        videos = await fetch_course_videos(
+        # Fetch videos from MongoDB (only ObjectIds)
+        videos, skipped_items = await fetch_course_videos(
             course_id=course_id,
             courses_collection=courses_collection,
             courses_videos_collection=courses_videos_collection
@@ -340,16 +356,12 @@ async def QuestionAnswerGenerationModel(
         
         if not videos:
             return JSONResponse(
-                content={"message": "No videos found for this course"},
+                content={"message": "No valid video ObjectIds found for this course"},
                 status_code=404
             )
         
-        # print(f"Found {len(videos)} videos to process")
-        
-        # NEW: Split videos into batches of 5
+        # Split videos into batches of 5
         video_batches = chunk_videos(videos, batch_size=5)
-        # print(f"Split into {len(video_batches)} batches (5 videos each)")
-        
         # Initialize
         all_paths = await paths()
         (
@@ -365,207 +377,114 @@ async def QuestionAnswerGenerationModel(
         question_selection_chain = create_question_selection_chain(selection_model)
         cumulative_summary_chain = create_cumulative_summary_chain(cumulative_summary_model)
         
-        # NEW: Storage for results (to save to MongoDB at the end)
-        all_lecture_questions = {}
-        all_cumulative_questions = {}
-        all_lecture_summaries = {}
-        all_previous_lecture_summary = ""
-        total_lectures_processed = 0
+        # Tracking variables
+        all_previous_cumulative_summary = ""
+        total_videos_processed = 0
+        processed_video_ids = []
         
-        # NEW: Process each batch of videos
+        # Process each batch
         for batch_idx, batch_videos in enumerate(video_batches):
-            # print(f"\n{'='*60}")
-            # print(f"Processing Batch {batch_idx + 1}/{len(video_batches)}")
-            # print(f"Videos in this batch: {len(batch_videos)}")
-            # print(f"{'='*60}")
+            # Create batch-specific paths
+            batch_paths = await create_batch_paths(all_paths["data_dir"], batch_idx)
             
-            lecture_pdfs = []
-            
-            # Process videos in current batch to PDFs
-            for video_idx, video in enumerate(batch_videos):
-                global_video_idx = batch_idx * 5 + video_idx
+            # Store paths to clean up after batch
+            batch_cleanup_paths = [batch_paths["batch_dir"]]
+            print("there is a new batch", batch_idx)
+            try:
                 
-                video_url = video.get("videoUrl")
-                video_title = video.get("video_title", f"Video {global_video_idx + 1}")
-                
-                if not video_url:
-                    # print(f"Skipping video {global_video_idx + 1}: No URL found")
-                    continue
-                
-                # print(f"\nProcessing Video {global_video_idx + 1}: {video_title}")
-                
-                # NEW: Download video from URL
-                video_target = all_paths["input_video_dir"] / f"input_{global_video_idx}.mp4"
-                # print(f"  → Downloading video from URL...")
-                await download_video_from_url(video_url, video_target)
-                
-                # Rest of the processing (same as before)
-                audio_target = all_paths["input_audio_dir"] / f"input_{global_video_idx}.mp3"
-                text_file_path = all_paths["input_text_dir"] / f"input_{global_video_idx}.txt"
-                pdf_path = all_paths["input_pdf_dir"] / f"lecture_{global_video_idx + 1}.pdf"
-                
-                # print(f"  → Converting to audio...")
-                await video_to_audio(video_target, output_path=audio_target)
-                
-                # print(f"  → Transcribing audio...")
-                await audio_to_text(
-                    path=audio_target,
-                    text_file_path=text_file_path,
-                    hinglish=hinglish
-                )
-                
-                # print(f"  → Converting to PDF...")
-                await save_text_to_pdf(
-                    text_file_path=text_file_path,
-                    output_path=pdf_path,
-                    font_path=all_paths["font_path"]
-                )
-                
-                lecture_pdfs.append({
-                    "pdf_path": pdf_path,
-                    "video_title": video_title,
-                    "global_idx": global_video_idx
-                })
-                
-                # print(f"✓ Video {global_video_idx + 1} processed successfully")
-            
-            # Process each lecture in the batch
-            for lecture_info in lecture_pdfs:
-                lecture_idx = lecture_info["global_idx"]
-                lecture_pdf = lecture_info["pdf_path"]
-                video_title = lecture_info["video_title"]
-                
-                # print(f"\n--- Generating Summary for Lecture {lecture_idx + 1}: {video_title} ---")
-                
-                # Create lecture-specific split directory
-                lecture_split_dir = all_paths["split_pdf_dir"] / f"lecture_{lecture_idx + 1}"
-                await asyncio.to_thread(lecture_split_dir.mkdir, parents=True, exist_ok=True)
-                
-                # Generate summaries
-                lecture_concise, lecture_detailed = await process_single_lecture(
-                    lecture_idx=lecture_idx,
-                    lecture_pdf_path=lecture_pdf,
-                    split_pdf_dir=lecture_split_dir,
-                    summary_chain=summary_chain,
-                    number_of_questions=number_of_questions,
-                    lecture_summaries_dir=all_paths["lecture_summaries_dir"]
-                )
-                
-                # NEW: Store summaries for MongoDB
-                all_lecture_summaries[f"lecture_{lecture_idx + 1}"] = {
-                    "video_title": video_title,
-                    "concise_summary": lecture_concise,
-                    "detailed_summary": lecture_detailed
-                }
-                
-                # Generate lecture-specific questions
-                # print(f"  → Generating questions for Lecture {lecture_idx + 1}...")
-                lecture_questions = await generate_questions_for_lecture(
-                    lecture_summary=lecture_detailed,
-                    question_generation_chain=question_generation_chain,
-                    question_selection_chain=question_selection_chain,
-                    number_of_questions=number_of_questions
-                )
-                
-                # NEW: Store questions for MongoDB
-                all_lecture_questions[f"lecture_{lecture_idx + 1}"] = {
-                    "video_title": video_title,
-                    "questions": lecture_questions
-                }
-                
-                await write_file(
-                    all_paths["lecture_questions_dir"] / f"lecture_{lecture_idx + 1}_questions.json",
-                    lecture_questions
-                )
-                
-                # Update cumulative summary
-                if total_lectures_processed == 0:
-                    all_previous_lecture_summary = lecture_concise
-                else:
-                    # print(f"  → Updating cumulative summary...")
-                    cumulative_result = await cumulative_summary_chain.ainvoke({
-                        "previous_lectures_summary": all_previous_lecture_summary,
-                        "new_lecture_summary": lecture_concise,
-                        "lecture_number": total_lectures_processed + 1
-                    })
-                    all_previous_lecture_summary = cumulative_result["combined_summary"]
-                
-                await write_file(
-                    all_paths["all_previous_lecture_summary_file"],
-                    all_previous_lecture_summary
-                )
-                
-                # Generate cumulative questions (from lecture 2 onwards)
-                if total_lectures_processed > 0:
-                    # print(f"  → Generating cumulative questions (Lectures 1-{total_lectures_processed + 1})...")
-                    cumulative_questions = await generate_questions_for_lecture(
-                        lecture_summary=all_previous_lecture_summary,
+                # Process each video in batch
+                for video_idx_in_batch, video_doc in enumerate(batch_videos):
+                    print(video_idx_in_batch, video_doc)
+
+                    global_video_idx = total_videos_processed
+                    
+                    # Process video to get summaries
+                    video_id, video_title, concise_summary, detailed_summary = await process_single_video(
+                        video_doc=video_doc,
+                        video_idx_in_batch=video_idx_in_batch,
+                        global_video_idx=global_video_idx,
+                        batch_paths=batch_paths,
+                        font_path=all_paths["font_path"],
+                        summary_chain=summary_chain,
+                        number_of_questions=number_of_questions,
+                        hinglish=hinglish
+                    )
+                    
+                    # Generate individual questions (based on this video only)
+                    individual_questions = await generate_questions_for_lecture(
+                        lecture_summary=detailed_summary,
                         question_generation_chain=question_generation_chain,
                         question_selection_chain=question_selection_chain,
                         number_of_questions=number_of_questions
                     )
                     
-                    # NEW: Store cumulative questions for MongoDB
-                    all_cumulative_questions[f"lectures_1_to_{total_lectures_processed + 1}"] = {
-                        "questions": cumulative_questions
+                    # Update cumulative summary
+                    if total_videos_processed == 0:
+                        # First video: cumulative = individual
+                        all_previous_cumulative_summary = concise_summary
+                        cumulative_questions = individual_questions  # For consistency
+                        cumulative_summary_up_to_here = concise_summary
+                    else:
+                        # Videos 2+: combine with previous summaries
+                        cumulative_result = await cumulative_summary_chain.ainvoke({
+                            "previous_lectures_summary": all_previous_cumulative_summary,
+                            "new_lecture_summary": concise_summary,
+                            "lecture_number": total_videos_processed + 1
+                        })
+                        cumulative_summary_up_to_here = cumulative_result["combined_summary"]
+                        all_previous_cumulative_summary = cumulative_summary_up_to_here
+                        
+                        # Generate cumulative questions
+                        cumulative_questions = await generate_questions_for_lecture(
+                            lecture_summary=cumulative_summary_up_to_here,
+                            question_generation_chain=question_generation_chain,
+                            question_selection_chain=question_selection_chain,
+                            number_of_questions=number_of_questions
+                        )
+                    
+                    # Save to MongoDB
+                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    video_data = {
+                        "individual_questions": individual_questions,
+                        "cumulative_questions": cumulative_questions,
+                        "concise_summary": concise_summary,
+                        "detailed_summary": detailed_summary,
+                        "cumulative_summary_up_to_here": cumulative_summary_up_to_here,
+                        "processed_at": current_time
                     }
                     
-                    await write_file(
-                        all_paths["cumulative_questions_dir"] / f"cumulative_lectures_1_to_{total_lectures_processed + 1}_questions.json",
-                        cumulative_questions
+                    await save_video_results(
+                        video_id=video_id,
+                        video_data=video_data,
+                        courses_videos_collection=courses_videos_collection
                     )
+                    
+                    processed_video_ids.append(video_id)
+                    total_videos_processed += 1
                 
-                total_lectures_processed += 1
-                # print(f"✓ Lecture {lecture_idx + 1} complete")
+            finally:
+                # Clean up batch files to free RAM
+                await cleanup_batch_files(batch_cleanup_paths)
+                pass
         
-        # NEW: Save results to MongoDB
-        # print(f"\n{'='*60}")
-        # print(f"Saving results to MongoDB...")
-        # print(f"{'='*60}")
-        
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        results_data = {
-            "lecture_questions": all_lecture_questions,
-            "cumulative_questions": all_cumulative_questions,
-            "lecture_summaries": all_lecture_summaries,
-            "all_previous_lecture_summary": all_previous_lecture_summary,
-            "total_lectures_processed": total_lectures_processed,
-            "created_at": current_time,
-            "updated_at": current_time
-        }
-        
-        qa_document_id = await save_results_to_mongodb(
-            course_id=course_id,
-            results_data=results_data,
-            courses_collection=courses_collection,
-            course_question_and_answers_collection=course_question_and_answers_collection
-        )
-        
-        # Cleanup
+        # Final cleanup
         await cleanup(all_paths)
         
-        # print(f"✓ Results saved to MongoDB with ID: {qa_document_id}")
-        # print(f"✓ Course document updated with question_answers_id")
-        # print(f"\n{'='*60}")
-        # print(f"Processing Complete!")
-        # print(f"{'='*60}")
-        
-        # NEW: Return success response with MongoDB document ID
         return JSONResponse(
             content={
                 "message": "Question generation completed successfully",
                 "course_id": course_id,
-                "question_answers_id": qa_document_id,
-                "total_lectures_processed": total_lectures_processed,
-                "total_videos": len(videos)
+                "total_videos_processed": total_videos_processed,
+                "processed_video_ids": processed_video_ids,
+                "skipped_items": skipped_items if skipped_items else None
             },
             status_code=200
         )
         
     except Exception as err:
-        # print(f"\n Error: {err}")
         try:
             await cleanup(all_paths)
+            pass
         except:
             pass
         
