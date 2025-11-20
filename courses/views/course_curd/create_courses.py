@@ -43,7 +43,6 @@ async def create_course(
     """Create course with optional video upload"""
     try:
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(1)
         # Create individual video documents
         video_ids = []
         if video_file and len(video_file) > 0 and video_file[0].filename:
@@ -132,7 +131,7 @@ async def create_course(
             )
         
 
-
+ 
         new_course["_id"] = course_id
         if new_course["instructor_id"]:
             new_course["instructor_id"] = str(new_course["instructor_id"])
