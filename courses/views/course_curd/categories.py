@@ -9,15 +9,17 @@ async def get_all_categories(
     """Get all categories with id and category_name"""
     try:
         docs = await categories_collection.find({}).to_list(length=10000)
-        
+
         categories = [
             {
                 "id": str(doc.get("_id")),
-                "category_name": doc.get("name")
+                "category_name": doc.get("name"),
+                "image": doc.get("image") or doc.get("image_url"),
+                "status": doc.get("status", True)
             }
             for doc in docs
-        ]
-        
+        ]    
+            
         return {
             "success": True,
             "message": "Categories retrieved successfully",

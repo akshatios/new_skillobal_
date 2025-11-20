@@ -2,8 +2,14 @@ from fastapi import APIRouter
 from courses.views.course_curd.create_courses import create_course
 from courses.views.course_curd.all_courses_details import get_all_courses_details
 from courses.views.course_curd.categories import get_all_categories
+from courses.views.course_curd.create_category import create_category
+from courses.views.course_curd.delete_category import delete_category
+from courses.views.course_curd.update_category import update_category
 from courses.views.course_curd.instructor import get_all_instructors
 from languages.views.get_languages import get_all_languages
+from languages.views.create_language import create_language
+from languages.views.update_language import update_language
+from languages.views.delete_language import delete_language
 from courses.views.course_curd.top_courses import get_top_courses
 from courses.views.course_curd.visible_courses import get_visible_courses
 from courses.views.course_curd.visible_T_F import toggle_course_visibility
@@ -43,8 +49,14 @@ courses_router.add_api_route("/intro-videos/delete-all", delete_all_intro_videos
 courses_router.add_api_route("/course-videos/delete-all", delete_all_course_videos_from_tencent, methods=["DELETE"], description="Delete all course videos from collection and Tencent Cloud")
 
 # Categories, Languages and Instructors
+courses_router.add_api_route("/categories/create", create_category, methods=["POST"], description="Create new category")
 courses_router.add_api_route("/categories/all", get_all_categories, methods=["GET"], description="Get all categories")
+courses_router.add_api_route("/categories/{category_id}/update", update_category, methods=["PUT"], description="Update category")
+courses_router.add_api_route("/categories/{category_id}/delete", delete_category, methods=["DELETE"], description="Delete category")
+courses_router.add_api_route("/languages/create", create_language, methods=["POST"], description="Create new language")
 courses_router.add_api_route("/languages/all", get_all_languages, methods=["GET"], description="Get all languages")
+courses_router.add_api_route("/languages/{language_id}/update", update_language, methods=["PUT"], description="Update language")
+courses_router.add_api_route("/languages/{language_id}/delete", delete_language, methods=["DELETE"], description="Delete language")
 courses_router.add_api_route("/instructors/all", get_all_instructors, methods=["GET"], description="Get all instructors")
 
 # Lessons

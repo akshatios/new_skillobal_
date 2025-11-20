@@ -13,7 +13,8 @@ async def get_all_languages(
         languages = [
             {
                 "id": str(doc.get("_id")),
-                "name": doc.get("name")
+                "name": doc.get("name"),
+                "status": doc.get("status", True)
             }
             for doc in docs
         ]
