@@ -1,5 +1,4 @@
 from core.database import users_collection, courses_collection
-
 from fastapi import Request, Depends
 from bson import ObjectId
 from fastapi.responses import JSONResponse

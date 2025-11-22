@@ -27,14 +27,14 @@ async def create_course(
     token: str = Depends(get_current_user),
     title: str = Form(...),
     description: str = Form(...),
-    category_id: str = Form(...),
-    language_id: str = Form(...),
+    category_id: str = Form(...),  # Comma-separated IDs
+    language_id: str = Form(...),  # Comma-separated IDs
     visible: bool = Form(...),
     course_image_url: Optional[UploadFile] = File(None),
     course_intro_video: Optional[UploadFile] = File(None),
     rating: Optional[float] = Form(None),
     price: Optional[float] = Form(None),
-    instructor_id: Optional[str] = Form(None),
+    instructor_id: Optional[str] = Form(None),  # Comma-separated IDs
     video_title: Optional[str] = Form(None),
     video_description: Optional[str] = Form(None),
     video_order: Optional[str] = Form(None),
@@ -104,18 +104,23 @@ async def create_course(
             
 
 
+        # Parse comma-separated IDs into arrays
+        category_id_list = [ObjectId(id.strip()) for id in category_id.split(',') if id.strip() and id.strip() != "string"]
+        language_id_list = [ObjectId(id.strip()) for id in language_id.split(',') if id.strip() and id.strip() != "string"]
+        instructor_id_list = [ObjectId(id.strip()) for id in instructor_id.split(',') if instructor_id and id.strip() and id.strip() != "string"] if instructor_id else []
+
         new_course = {
             "title": title,
             "description": description,
-            "category_id": ObjectId(category_id) if category_id and category_id != "string" else None,
-            "language_id": ObjectId(language_id) if language_id and language_id != "string" else None,
+            "category_id": category_id_list,
+            "language_id": language_id_list,
             "visible": visible,
             "images": image_obj,
             "intro_videos": intro_video_obj,
             "videos": video_ids,
             "rating": rating,
             "price": price,
-            "instructor_id": ObjectId(instructor_id) if instructor_id and instructor_id != "string" else None,
+            "instructor_id": instructor_id_list,
             "created_at": current_time,
             "updated_at": current_time
         }
@@ -133,12 +138,9 @@ async def create_course(
 
  
         new_course["_id"] = course_id
-        if new_course["instructor_id"]:
-            new_course["instructor_id"] = str(new_course["instructor_id"])
-        if new_course["category_id"]:
-            new_course["category_id"] = str(new_course["category_id"])
-        if new_course["language_id"]:
-            new_course["language_id"] = str(new_course["language_id"])
+        new_course["instructor_id"] = [str(id) for id in new_course["instructor_id"]]
+        new_course["category_id"] = [str(id) for id in new_course["category_id"]]
+        new_course["language_id"] = [str(id) for id in new_course["language_id"]]
 
         if new_course["videos"]:
             new_course["videos"] = [str(vid_id) for vid_id in new_course["videos"]]
@@ -169,9 +171,9 @@ async def create_course(
             "rating": rating or 0.0,
             "price": price or 0.0,
             "visible": visible,
-            "instructor_id": str(new_course["instructor_id"]) if new_course["instructor_id"] else None,
-            "category_id": str(new_course["category_id"]) if new_course["category_id"] else None,
-            "language_id": str(new_course["language_id"]) if new_course["language_id"] else None,
+            "instructor_id": new_course["instructor_id"],
+            "category_id": new_course["category_id"],
+            "language_id": new_course["language_id"],
             "videos": videos_data,  # Actual videos data
             "created_at": current_time,
             "updated_at": current_time

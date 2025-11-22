@@ -15,14 +15,14 @@ async def update_course(
     token: str = Depends(get_current_user),
     title: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
-    category_id: Optional[str] = Form(None),
-    language_id: Optional[str] = Form(None),
+    category_id: Optional[str] = Form(None),  # Comma-separated IDs
+    language_id: Optional[str] = Form(None),  # Comma-separated IDs
     visible: Optional[bool] = Form(None),
     course_image_url: Optional[UploadFile] = File(None),
     course_intro_video: Optional[UploadFile] = File(None),
     rating: Optional[float] = Form(None),
     price: Optional[float] = Form(None),
-    instructor_id: Optional[str] = Form(None)
+    instructor_id: Optional[str] = Form(None)  # Comma-separated IDs
 ):
     """Update course basic info with smart file replacement (no videos)"""
     try:
@@ -47,9 +47,9 @@ async def update_course(
         if description is not None:
             update_data["description"] = description
         if category_id is not None:
-            update_data["category_id"] = ObjectId(category_id) if category_id != "string" else None
+            update_data["category_id"] = [ObjectId(id.strip()) for id in category_id.split(',') if id.strip() and id.strip() != "string"]
         if language_id is not None:
-            update_data["language_id"] = ObjectId(language_id) if language_id != "string" else None
+            update_data["language_id"] = [ObjectId(id.strip()) for id in language_id.split(',') if id.strip() and id.strip() != "string"]
         if visible is not None:
             update_data["visible"] = visible
         if rating is not None:
@@ -57,7 +57,7 @@ async def update_course(
         if price is not None:
             update_data["price"] = price
         if instructor_id is not None:
-            update_data["instructor_id"] = ObjectId(instructor_id) if instructor_id != "string" else None
+            update_data["instructor_id"] = [ObjectId(id.strip()) for id in instructor_id.split(',') if id.strip() and id.strip() != "string"]
         
         # Handle course image update
         if course_image_url and course_image_url.filename:
@@ -135,12 +135,12 @@ async def update_course(
             "_id": course_id,
             "title": updated_course["title"],
             "description": updated_course["description"],
-            "category_id": str(updated_course["category_id"]) if updated_course.get("category_id") else None,
-            "language_id": str(updated_course["language_id"]) if updated_course.get("language_id") else None,
+            "category_id": [str(id) for id in updated_course.get("category_id", [])],
+            "language_id": [str(id) for id in updated_course.get("language_id", [])],
             "visible": updated_course["visible"],
             "rating": updated_course.get("rating", 0.0),
             "price": updated_course.get("price", 0.0),
-            "instructor_id": str(updated_course["instructor_id"]) if updated_course.get("instructor_id") else None,
+            "instructor_id": [str(id) for id in updated_course.get("instructor_id", [])],
             "images": updated_course.get("images"),
             "intro_videos": updated_course.get("intro_videos"),
             "image_url": updated_course["images"]["course_image_url"] if updated_course.get("images") else None,

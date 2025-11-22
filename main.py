@@ -10,16 +10,14 @@ from middleware.tokenAuthentication import AccessTokenAuthenticatorMiddleware
 app = FastAPI(title="Skillobal API")
 
 # Updated CORS origins to include HTTPS domain
-origins = [
-    "*"                       # For development only, allows all origins
-]
+origins = ["*"]
 
-allowed_hosts = ["*"]  # In production, consider: ["a.com", "www.a.com"]
+allowed_hosts = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # If we convert it to allow_origins=["*"] it will allow all origins -> so we implemented CORS_ALLOW_ALL_ORIGINS = True from django to fastapi
-    allow_credentials=False, # For development only, when origins is "*", credentials cannot be true
+    allow_origins=origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -37,7 +35,3 @@ app.include_router(api_router)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True) 
-
-    # uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    # gunicorn main:app --worker-class uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:8000
-    # Remove-Item -Path "prom-metrics\*" -Recurse -Force
