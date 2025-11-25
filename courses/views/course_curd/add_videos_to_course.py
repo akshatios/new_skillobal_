@@ -14,7 +14,7 @@ async def add_videos_to_course(
     token: str = Depends(get_current_user),
     video_title: Optional[str] = Form(None),
     video_description: Optional[str] = Form(None),
-    video_order: Optional[str] = Form(None),
+    order: Optional[str] = Form(None),
     video_file: List[UploadFile] = File(...)
 ):
     """Add new videos to existing course"""
@@ -37,7 +37,7 @@ async def add_videos_to_course(
         # Parse comma-separated metadata
         titles = video_title.split(',') if video_title else []
         descriptions = video_description.split(',') if video_description else []
-        orders = video_order.split(',') if video_order else []
+        orders = order.split(',') if order else []
         
         # Upload videos and prepare data
         new_videos_list = []
@@ -47,7 +47,7 @@ async def add_videos_to_course(
                 video_content = await vid_file.read()
                 video_result = await upload_to_tencent_vod(video_content, vid_file.filename)
                 
-                # Get order value, default to index if not provided
+                # Simple order - use provided order or increment
                 order_value = int(orders[i].strip()) if i < len(orders) and orders[i].strip().isdigit() else i + 1
                 
                 video_obj = {
@@ -81,8 +81,8 @@ async def add_videos_to_course(
             {"$set": {"videos": updated_video_ids, "updated_at": current_time}}
         )
         
-        # Get all videos for response
-        all_videos_cursor = courses_videos_collection.find({"_id": {"$in": updated_video_ids}})
+        # Get all videos for response sorted by order
+        all_videos_cursor = courses_videos_collection.find({"_id": {"$in": updated_video_ids}}).sort("order", 1)
         all_videos = []
         async for video in all_videos_cursor:
             video["_id"] = str(video["_id"])

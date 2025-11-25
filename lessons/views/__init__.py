@@ -1,1 +1,0 @@
-# Lessons module for course management

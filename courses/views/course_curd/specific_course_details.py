@@ -32,40 +32,38 @@ async def get_specific_course_details(
         # Fetch complete video details
         if "videos" in course and course["videos"]:
             try:
-                # Get individual video documents
-                videos_cursor = courses_videos_collection.find({"_id": {"$in": course["videos"]}})
+                # Get individual video documents sorted by order
+                videos_cursor = courses_videos_collection.find({"_id": {"$in": course["videos"]}}).sort("order", 1)
                 videos_details = []
                 async for video in videos_cursor:
                     video["_id"] = str(video["_id"])
+                    # Remove unwanted fields
+                    video.pop("type", None)
+                    video.pop("created_at", None)
                     videos_details.append(video)
                 
-                # Sort videos by order
-                videos_details.sort(key=lambda x: x.get("order", 0))
+
                 
                 course["videos_details"] = videos_details
-                course["total_videos"] = len(videos_details)
             except Exception as e:
                 course["videos_details"] = []
-                course["total_videos"] = 0
         else:
             course["videos_details"] = []
-            course["total_videos"] = 0
         
-        # Add summary statistics
-        course["summary"] = {
-            "total_images": 1 if course.get("images") else 0,
-            "total_intro_videos": 1 if course.get("intro_videos") else 0,
-            "total_course_videos": course["total_videos"],
-            "has_content": (
-                course.get("images") is not None or 
-                course.get("intro_videos") is not None or 
-                course["total_videos"] > 0
-            )
-        }
+
         
-        # Add backward compatibility fields
-        course["image_url"] = course["images"]["course_image_url"] if course.get("images") else None
-        course["intro_video"] = course["intro_videos"]["videoUrl"] if course.get("intro_videos") else None
+        # Remove videos array (keep only videos_details)
+        if "videos" in course:
+            del course["videos"]
+        
+        # Clean intro_videos and images - remove type and uploaded_at
+        if "intro_videos" in course and course["intro_videos"]:
+            course["intro_videos"].pop("type", None)
+            course["intro_videos"].pop("uploaded_at", None)
+        
+        if "images" in course and course["images"]:
+            course["images"].pop("type", None)
+            course["images"].pop("uploaded_at", None)
         
         # Convert ObjectIds to strings
         course = convert_objectids(course)

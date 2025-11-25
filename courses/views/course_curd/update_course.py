@@ -59,6 +59,8 @@ async def update_course(
         if instructor_id is not None:
             update_data["instructor_id"] = [ObjectId(id.strip()) for id in instructor_id.split(',') if id.strip() and id.strip() != "string"]
         
+
+        
         # Handle course image update
         if course_image_url and course_image_url.filename:
             # Get old image fileId for deletion
@@ -130,6 +132,16 @@ async def update_course(
         # Get updated course for response
         updated_course = await courses_collection.find_one({"_id": ObjectId(course_id)})
         
+        # Clean intro_videos and images - remove type and uploaded_at
+        clean_images = None
+        clean_intro_videos = None
+        
+        if updated_course.get("images"):
+            clean_images = {k: v for k, v in updated_course["images"].items() if k not in ["type", "uploaded_at"]}
+        
+        if updated_course.get("intro_videos"):
+            clean_intro_videos = {k: v for k, v in updated_course["intro_videos"].items() if k not in ["type", "uploaded_at"]}
+        
         # Format response
         response_data = {
             "_id": course_id,
@@ -141,10 +153,8 @@ async def update_course(
             "rating": updated_course.get("rating", 0.0),
             "price": updated_course.get("price", 0.0),
             "instructor_id": [str(id) for id in updated_course.get("instructor_id", [])],
-            "images": updated_course.get("images"),
-            "intro_videos": updated_course.get("intro_videos"),
-            "image_url": updated_course["images"]["course_image_url"] if updated_course.get("images") else None,
-            "intro_video": updated_course["intro_videos"]["videoUrl"] if updated_course.get("intro_videos") else None,
+            "images": clean_images,
+            "intro_videos": clean_intro_videos,
             "updated_at": current_time,
             "cleanup_info": {
                 "old_files_deleted": deleted_files,

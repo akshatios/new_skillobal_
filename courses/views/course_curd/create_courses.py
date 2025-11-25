@@ -37,7 +37,7 @@ async def create_course(
     instructor_id: Optional[str] = Form(None),  # Comma-separated IDs
     video_title: Optional[str] = Form(None),
     video_description: Optional[str] = Form(None),
-    video_order: Optional[str] = Form(None),
+    order: Optional[str] = Form(None),
     video_file: List[UploadFile] = File([]),
 ):
     """Create course with optional video upload"""
@@ -48,15 +48,15 @@ async def create_course(
         if video_file and len(video_file) > 0 and video_file[0].filename:
             titles = video_title.split(',') if video_title else []
             descriptions = video_description.split(',') if video_description else []
-            orders = video_order.split(',') if video_order else []
+            orders = order.split(',') if order else []
             
             for i, vid_file in enumerate(video_file):
                 if vid_file.filename:
                     video_content = await vid_file.read()
                     video_result = await upload_to_tencent_vod(video_content, vid_file.filename)
                     
-                    # Get order value, default to index if not provided
-                    order_value = int(orders[i].strip()) if i < len(orders) and orders[i].strip().isdigit() else i
+                    # Simple order - use provided order or increment
+                    order_value = int(orders[i].strip()) if i < len(orders) and orders[i].strip().isdigit() else i + 1
                     
                     video_obj = {
                         "order": order_value,
@@ -109,6 +109,8 @@ async def create_course(
         language_id_list = [ObjectId(id.strip()) for id in language_id.split(',') if id.strip() and id.strip() != "string"]
         instructor_id_list = [ObjectId(id.strip()) for id in instructor_id.split(',') if instructor_id and id.strip() and id.strip() != "string"] if instructor_id else []
 
+
+
         new_course = {
             "title": title,
             "description": description,
@@ -151,12 +153,15 @@ async def create_course(
         except Exception:
             pass  # Don't fail course creation if layout update fails
 
-        # Fetch videos data for response
+        # Fetch videos data for response sorted by order
         videos_data = []
         if video_ids:
-            videos_cursor = courses_videos_collection.find({"_id": {"$in": video_ids}})
+            videos_cursor = courses_videos_collection.find({"_id": {"$in": video_ids}}).sort("order", 1)
             async for video in videos_cursor:
                 video["_id"] = str(video["_id"])
+                # Remove unwanted fields
+                video.pop("type", None)
+                video.pop("created_at", None)
                 videos_data.append(video)
         
         # Format response for frontend compatibility
@@ -166,8 +171,8 @@ async def create_course(
             "description": description,
             "images": image_obj,
             "intro_videos": intro_video_obj,
-            "image_url": image_obj["course_image_url"] if image_obj else None,  # Backward compatibility
-            "intro_video": intro_video_url,  # Backward compatibility
+            # "image_url": image_obj["course_image_url"] if image_obj else None,  # Backward compatibility
+            # "intro_video": intro_video_url,  # Backward compatibility
             "rating": rating or 0.0,
             "price": price or 0.0,
             "visible": visible,

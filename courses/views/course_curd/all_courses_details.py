@@ -35,11 +35,14 @@ async def get_all_courses_details(
         for course in courses:
             if "videos" in course and course["videos"]:
                 try:
-                    # Get individual video documents
-                    videos_cursor = courses_videos_collection.find({"_id": {"$in": course["videos"]}})
+                    # Get individual video documents sorted by order
+                    videos_cursor = courses_videos_collection.find({"_id": {"$in": course["videos"]}}).sort("order", 1)
                     videos_details = []
                     async for video in videos_cursor:
                         video["_id"] = str(video["_id"])
+                        # Remove unwanted fields
+                        video.pop("type", None)
+                        video.pop("created_at", None)
                         videos_details.append(video)
                     course["videos_details"] = videos_details
                     course["total_videos"] = len(videos_details)
@@ -49,6 +52,19 @@ async def get_all_courses_details(
             else:
                 course["videos_details"] = []
                 course["total_videos"] = 0
+            
+            # Remove videos array (keep only videos_details)
+            if "videos" in course:
+                del course["videos"]
+            
+            # Clean intro_videos and images - remove type and uploaded_at
+            if "intro_videos" in course and course["intro_videos"]:
+                course["intro_videos"].pop("type", None)
+                course["intro_videos"].pop("uploaded_at", None)
+            
+            if "images" in course and course["images"]:
+                course["images"].pop("type", None)
+                course["images"].pop("uploaded_at", None)
         
         courses = convert_objectids(courses)
         
