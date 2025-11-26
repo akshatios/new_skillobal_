@@ -6,13 +6,14 @@ async def get_all_instructors(
     request: Request,
     token: str = Depends(get_current_user)
 ):
-    """Get all instructors with id and instructor_name"""
+ 
     try:
         docs = await instructors_collection.find({}).to_list(length=10000)  
         instructors = [
             {
                 "id": str(doc.get("_id")),
-                "instructor_name": doc.get("name")
+                "instructor_name": doc.get("name"),
+                "status": doc.get("status", True)
             }
             for doc in docs
         ]

@@ -2,6 +2,7 @@ from fastapi import HTTPException, Depends
 from bson import ObjectId
 from core.database import courses_collection, courses_videos_collection
 from helper_function.apis_requests import get_current_user
+from helper_function.validate_references import validate_course_references
 
 def convert_objectids(obj):
     """Recursively convert ObjectIds to strings"""
@@ -28,6 +29,9 @@ async def get_specific_course_details(
         course = await courses_collection.find_one({"_id": ObjectId(course_id)})
         if not course:
             raise HTTPException(status_code=404, detail="Course not found")
+        
+        # Validate and clean invalid references
+        course = await validate_course_references(course)
         
         # Fetch complete video details
         if "videos" in course and course["videos"]:

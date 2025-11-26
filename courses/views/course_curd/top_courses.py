@@ -2,6 +2,7 @@ from fastapi import HTTPException, Request, Depends
 from core.database import layout_collection, courses_collection
 from bson import ObjectId
 from helper_function.apis_requests import get_current_user
+from helper_function.validate_references import validate_course_references
 
 async def get_top_courses(
     request: Request,
@@ -60,18 +61,22 @@ async def get_top_courses(
             {"_id": {"$in": course_object_ids}}
         ).to_list(length=1000)
         
+        # Validate references for each course
+        for i, doc in enumerate(courses_docs):
+            courses_docs[i] = await validate_course_references(doc)
+        
         # Format course data
         top_courses = [
             {
                 "id": str(doc.get("_id")),
                 "title": doc.get("title"),
                 "description": doc.get("description"),
-                "image_url": doc.get("images", [{}])[0].get("course_image_url") if doc.get("images") else None,
+                "image_url": doc.get("images", {}).get("course_image_url") if doc.get("images") else None,
                 "rating": doc.get("rating"),
                 "price": doc.get("price"),
                 "visible": doc.get("visible"),
-                "instructor_id": str(doc.get("instructor_id")) if doc.get("instructor_id") else None,
-                "category_id": str(doc.get("category_id")) if doc.get("category_id") else None,
+                "instructor_id": [str(id) for id in doc.get("instructor_id", [])] if doc.get("instructor_id") else [],
+                "category_id": [str(id) for id in doc.get("category_id", [])] if doc.get("category_id") else [],
             }
             for doc in courses_docs
         ]

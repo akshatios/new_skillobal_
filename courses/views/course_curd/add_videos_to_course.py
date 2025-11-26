@@ -88,9 +88,16 @@ async def add_videos_to_course(
             video["_id"] = str(video["_id"])
             all_videos.append(video)
         
+        # Auto-update layout based on rating in background
+        try:
+            from helper_function.layoutdata_update import update_layout_by_rating
+            await update_layout_by_rating()
+        except Exception:
+            pass  # Don't fail video addition if layout update fails
+        
         return {
-            "success": True,
-            "message": f"Successfully added {len(new_videos_list)} videos to course",
+            "status": 200,
+            "massage": f"Successfully added {len(new_videos_list)} videos to course",
             "data": {
                 "course_id": course_id,
                 "videos_added": len(new_videos_list),

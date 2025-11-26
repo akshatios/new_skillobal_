@@ -2,6 +2,7 @@ from fastapi import HTTPException, Request, Depends
 from bson import ObjectId
 from core.database import courses_collection, courses_videos_collection
 from helper_function.apis_requests import get_current_user
+from helper_function.validate_references import validate_course_references
 
 def convert_objectids(obj):
     """Recursively convert ObjectIds to strings"""
@@ -31,8 +32,10 @@ async def get_all_courses_details(
         courses_cursor = courses_collection.find({}).skip(skip).limit(limit)
         courses = await courses_cursor.to_list(length=None)
         
-        # Fetch video details for each course
+        # Validate references and fetch video details for each course
         for course in courses:
+            # Validate and clean invalid references
+            course = await validate_course_references(course)
             if "videos" in course and course["videos"]:
                 try:
                     # Get individual video documents sorted by order

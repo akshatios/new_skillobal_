@@ -147,7 +147,7 @@ async def create_course(
         if new_course["videos"]:
             new_course["videos"] = [str(vid_id) for vid_id in new_course["videos"]]
 
-        # Auto-update layout based on rating
+        # Auto-update layout based on rating in background
         try:
             await update_layout_by_rating()
         except Exception:
@@ -185,8 +185,8 @@ async def create_course(
         }
         
         return {
-            "success": True,
-            "message": "Course created successfully",
+            "status": 200,
+            "massage": "Course created successfully",
             "data": response_data
         }
 

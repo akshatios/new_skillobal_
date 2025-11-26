@@ -1,6 +1,6 @@
 from core.routes import api_router
-from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from middleware.allowedHostsMiddleware import AllowedHostsMiddleware
 from middleware.timeMeasureMiddleware import ExecutionTimeMiddleware
@@ -8,6 +8,17 @@ from middleware.checkUserExistsMiddleware import CheckUserExistsMiddleware
 from middleware.tokenAuthentication import AccessTokenAuthenticatorMiddleware
 
 app = FastAPI(title="Skillobal API")
+
+# Custom exception handler for consistent response format
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "status": exc.status_code,
+            "massage": exc.detail
+        }
+    )
 
 # Updated CORS origins to include HTTPS domain
 origins = ["*"]

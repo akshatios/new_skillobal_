@@ -38,6 +38,18 @@ async def update_course(
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         old_files_to_delete = []  # Track old files for cleanup
         
+        # Check if at least one field is provided for update
+        fields_to_check = [title, description, category_id, language_id, visible, rating, price, instructor_id]
+        files_to_check = [course_image_url, course_intro_video]
+        
+        has_field_update = any(field is not None for field in fields_to_check)
+        has_file_update = any(file and file.filename for file in files_to_check)
+        
+        if not has_field_update and not has_file_update:
+            raise HTTPException(status_code=400, detail="At least one field must be provided for update")
+        
+
+        
         # Prepare update data - only include fields that are provided
         update_data = {"updated_at": current_time}
         
@@ -60,7 +72,6 @@ async def update_course(
             update_data["instructor_id"] = [ObjectId(id.strip()) for id in instructor_id.split(',') if id.strip() and id.strip() != "string"]
         
 
-        
         # Handle course image update
         if course_image_url and course_image_url.filename:
             # Get old image fileId for deletion
@@ -108,9 +119,6 @@ async def update_course(
             {"_id": ObjectId(course_id)},
             {"$set": update_data}
         )
-        
-        if result.modified_count == 0:
-            raise HTTPException(status_code=400, detail="No changes made to course")
         
         # Background cleanup: Delete old files from Tencent
         deleted_files = []
@@ -162,9 +170,16 @@ async def update_course(
             }
         }
         
+        # Auto-update layout based on rating in background
+        try:
+            from helper_function.layoutdata_update import update_layout_by_rating
+            await update_layout_by_rating()
+        except Exception:
+            pass  # Don't fail course update if layout update fails
+        
         return {
-            "success": True,
-            "message": "Course updated successfully",
+            "status": 200,
+            "massage": "Course updated successfully",
             "data": response_data
         }
         

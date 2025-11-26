@@ -3,10 +3,7 @@ from bson import ObjectId
 from core.database import courses_collection, layout_collection
 from helper_function.apis_requests import get_current_user
 
-async def update_layout_by_rating(
-    request: Request,
-    token: str = Depends(get_current_user)
-):
+async def update_layout_by_rating():
     """Update layout collection based on course ratings"""
     try:
         # Get all courses directly from database
@@ -52,8 +49,8 @@ async def update_layout_by_rating(
         raise HTTPException(status_code=500, detail=str(e))
 
 async def get_layout_courses(
-    request: Request,
     layout_id: str,
+    request: Request = None,
     token: str = Depends(get_current_user)
 ):
     """Get courses for specific layout"""
@@ -82,3 +79,10 @@ async def get_layout_courses(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+async def update_layout_endpoint(
+    request: Request,
+    token: str = Depends(get_current_user)
+):
+    """Endpoint to manually update layout"""
+    return await update_layout_by_rating()

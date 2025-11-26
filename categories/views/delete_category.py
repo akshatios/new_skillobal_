@@ -19,10 +19,12 @@ async def delete_category(
         if not category:
             raise HTTPException(status_code=404, detail={"message": "Category not found. Please verify the category ID and try again."})
         
-        # Check if category is being used in courses
-        courses_using_category = await courses_collection.count_documents({"category_id": ObjectId(category_id)})
-        if courses_using_category > 0:
-            raise HTTPException(status_code=400, detail={"message": f"Cannot delete category as it is currently being used in {courses_using_category} active course(s)."})
+        # Remove category from all courses (cascade update)
+        courses_updated = await courses_collection.update_many(
+            {"category_id": ObjectId(category_id)},
+            {"$pull": {"category_id": ObjectId(category_id)}}
+        )
+        courses_affected = courses_updated.modified_count
         
         # Delete image from Tencent Cloud
         deleted_from_tencent = False
