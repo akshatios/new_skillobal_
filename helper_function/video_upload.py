@@ -245,7 +245,7 @@ async def upload_to_tencent_vod(file_content: bytes, filename: str):
         raise Exception(f"Video upload failed: {str(e)}")
 
 async def upload_course_video(
-    course_id: str = Form(...),
+    course_id: str,
     video_file: UploadFile = File(...),
     video_title: Optional[str] = Form(None),
     video_description: Optional[str] = Form(None),

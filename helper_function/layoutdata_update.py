@@ -1,21 +1,24 @@
-from fastapi import HTTPException
+from fastapi import HTTPException, Request, Depends
 from bson import ObjectId
 from core.database import courses_collection, layout_collection
-from .all_courses_details import get_all_courses_details
+from helper_function.apis_requests import get_current_user
 
-async def update_layout_by_rating():
+async def update_layout_by_rating(
+    request: Request,
+    token: str = Depends(get_current_user)
+):
     """Update layout collection based on course ratings"""
     try:
-        # Get all courses
-        courses_response = await get_all_courses_details()
-        courses = courses_response["data"]
+        # Get all courses directly from database
+        courses_cursor = courses_collection.find({})
+        courses = await courses_cursor.to_list(length=None)
         
         # Separate courses by rating
         high_rating_courses = []  # Rating >= 4
         low_rating_courses = []   # Rating < 4
         
         for course in courses:
-            course_id = ObjectId(course["_id"])
+            course_id = course["_id"]  # Already ObjectId from database
             if course.get("rating", 0) >= 4:
                 high_rating_courses.append(course_id)
             else:
@@ -48,7 +51,11 @@ async def update_layout_by_rating():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def get_layout_courses(layout_id: str):
+async def get_layout_courses(
+    request: Request,
+    layout_id: str,
+    token: str = Depends(get_current_user)
+):
     """Get courses for specific layout"""
     try:
         layout = await layout_collection.find_one({"_id": ObjectId(layout_id)})
